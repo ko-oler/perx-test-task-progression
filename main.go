@@ -121,8 +121,8 @@ func main() {
 	fmt.Println("Server started")
 	for t := 0; t < totalWorker; t++ {
 		// wg.Add(1)
-		go Work(wg)
+		go Work(mu)
 	}
 	log.Fatal(http.ListenAndServe(":80", r))
-	wg.Wait()
+	//wg.Wait()
 }
