@@ -17,112 +17,157 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
+	"flag"
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
 )
 
-const totalWorker int = 2
-
 type Task struct {
-	Id             string  `json:"index"`
-	N              int     `json:"n"`
-	D              float32 `json:"d"`
-	N1             float32 `json:"n1"`
-	I              float32 `json:"i"`
-	TTL            float32 `json:"ttl"`
-	Result         float32 `json:"res"`
-	Status         string  `json:"status"`
-	TimeStart      string  `json:"ts"`
-	TimeFinish     string  `json:"tf"`
-	TimeProccesing string  `json:"tp"`
+	Id             string    `json:"index"`
+	N              int       `json:"n"`
+	D              float32   `json:"d"`
+	N1             float32   `json:"n1"`
+	I              float32   `json:"i"`
+	TTL            float32   `json:"ttl"`
+	Result         float32   `json:"res"`
+	Status         string    `json:"status"`
+	TimeStart      time.Time `json:"time_start"`
+	TimeFinish     time.Time `json:"time_finish"`
+	TimeProccesing time.Time `json:"time_proccesing"`
 }
 
+var totalWorker int = 2
 var chtasks = make(chan *Task, 100)
 var tasks []*Task
+var mu = &sync.Mutex{}
+var wg = &sync.WaitGroup{}
 
-func getlistoftasks(w http.ResponseWriter, r *http.Request) {
-
-	sort.Slice(tasks, func(p, q int) bool {
-		return tasks[p].TimeStart < tasks[q].TimeStart
-	})
+//Handlers
+func GetListHandler(w http.ResponseWriter, r *http.Request) {
+	SortTasks()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tasks)
 }
 
-func Work(mu *sync.Mutex) {
-	for t := range chtasks {
-		//wg.Add(1)
-		calcprogression(t, mu)
-		//wg.Done()
-	}
-}
-
-func addtask(w http.ResponseWriter, r *http.Request) {
+func AddHandler(w http.ResponseWriter, r *http.Request) {
+	var task Task
 	w.Header().Set("Content-Type", "application/json")
-	var task *Task
-
 	err := json.NewDecoder(r.Body).Decode(&task)
 	if err != nil {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	task.Id = strconv.Itoa(rand.Intn(1000000))
-	task.Status = "Pending task"
-	task.TimeStart = time.Now().Format(time.RFC850)
-	tasks = append(tasks, task)
+	AddTaskToQueue(&task)
 	json.NewEncoder(w).Encode(task)
-	chtasks <- task
+
 }
 
-func calcprogression(t *Task, mu *sync.Mutex) {
+//Logic
+func Work(mu *sync.Mutex, wg *sync.WaitGroup) {
+	for t := range chtasks {
+		wg.Add(1)
+		CalcProgression(t, mu, wg)
+	}
+}
+
+func AddTaskToQueue(t *Task) {
+	t.Id = strconv.Itoa(rand.Intn(1000000))
+	t.Status = "Pending task"
+	t.TimeStart = time.Now()
+	mu.Lock()
+	tasks = append(tasks, t)
+	mu.Unlock()
+	chtasks <- t
+}
+
+func DeleteTask(t *Task, mu *sync.Mutex) []*Task {
+	mu.Lock()
+	defer mu.Unlock()
+	for index, task := range tasks {
+		if task.Id == t.Id {
+			log.Printf("Task deleted by TTL, ID:%s, TTL:%v seconds", t.Id, t.TTL)
+			tasks = append(tasks[:index], tasks[index+1:]...)
+			break
+		}
+	}
+
+	return tasks
+}
+
+func SortTasks() {
+	sort.Slice(tasks, func(p, q int) bool {
+		return tasks[p].TimeStart.Before(tasks[q].TimeStart)
+	})
+}
+
+func CalcProgression(t *Task, mu *sync.Mutex, wg *sync.WaitGroup) {
+	defer wg.Done()
 	var res float32 = t.N1
-	fmt.Println("Started calculation, ID:", t.Id)
 	t.Status = "Processing task"
-	t.TimeProccesing = time.Now().Format(time.RFC850)
+	t.TimeProccesing = time.Now()
+	log.Printf("Started calculation, ID:%s", t.Id)
 	for i := 0; i < t.N; i++ {
 		res += t.D
 		time.Sleep(time.Duration(t.I) * time.Millisecond)
 	}
 	t.Result = res
-	fmt.Println("Finished task, ID:", t.Id)
 	t.Status = "Finished task"
-	t.TimeFinish = time.Now().Format(time.RFC850)
-	time.AfterFunc(time.Duration(t.TTL)*time.Second, func() { deletetask(t, mu) })
-}
-
-func deletetask(t *Task, mu *sync.Mutex) []*Task {
-	mu.Lock()
-	for index, task := range tasks {
-		if task.Id == t.Id {
-			tasks = append(tasks[:index], tasks[index+1:]...)
-			break
-		}
-	}
-	mu.Unlock()
-	return tasks
+	t.TimeFinish = time.Now()
+	log.Printf("Finished task, ID:%s, result:%v ", t.Id, t.Result)
+	time.AfterFunc(time.Duration(t.TTL)*time.Second, func() { DeleteTask(t, mu) })
 }
 
 func main() {
 
-	//wg := &sync.WaitGroup{}
-	mu := &sync.Mutex{}
+	termChan := make(chan os.Signal)
+	signal.Notify(termChan, syscall.SIGTERM, syscall.SIGINT)
+
+	flag.IntVar(&totalWorker, "tw", 2, "количество одновременно выполняемых задач")
+	flag.Parse()
+	log.Println("Number of proccesing task: ", totalWorker)
+
 	r := mux.NewRouter()
-	r.HandleFunc("/List", getlistoftasks).Methods("GET")
-	r.HandleFunc("/Add", addtask).Methods("POST")
-	fmt.Println("Server started")
-	for t := 0; t < totalWorker; t++ {
-		// wg.Add(1)
-		go Work(mu)
+	httpServer := &http.Server{
+		Addr:    ":80",
+		Handler: r,
 	}
-	log.Fatal(http.ListenAndServe(":80", r))
-	//wg.Wait()
+	r.HandleFunc("/Add", AddHandler).Methods("POST")
+	r.HandleFunc("/List", GetListHandler).Methods("GET")
+
+	// Запуск воркеров
+	for t := 0; t < totalWorker; t++ {
+		go Work(mu, wg)
+	}
+
+	log.Println("Server started on port :80")
+
+	go func() {
+		<-termChan // Blocks here until interrupted
+		log.Print("SIGTERM received. Shutdown process initiated\n")
+		httpServer.Shutdown(context.Background())
+	}()
+
+	// Blocking
+	if err := httpServer.ListenAndServe(); err != nil {
+		if err.Error() != "http: Server closed" {
+			log.Printf("HTTP server closed with: %v\n", err)
+		}
+		log.Printf("HTTP server shut down")
+	}
+	log.Println("waiting for running jobs to finish")
+	wg.Wait()
+	log.Println("jobs finished. exiting")
+
 }
