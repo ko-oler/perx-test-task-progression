@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"log"
-	"sync"
 	"testing"
 	"time"
 )
@@ -51,7 +51,7 @@ var test = []testpair{
 			N:              20,
 			D:              2,
 			N1:             0,
-			I:              10,
+			I:              15,
 			TTL:            2,
 			Result:         0,
 			Status:         "",
@@ -66,16 +66,16 @@ var test = []testpair{
 func TestWork(t *testing.T) {
 
 	var totalWorker = 2
-	var mu = &sync.Mutex{}
-	var wg = &sync.WaitGroup{}
+	tl := NewTaskList()
+	ctx, cancel := context.WithCancel(context.Background())
 	var pending, finished = "Pending task", "Finished task"
 
 	for w := 0; w < totalWorker; w++ {
-		go Work(mu, wg)
+		go tl.Work(ctx)
 	}
 
 	for _, pair := range test {
-		AddTaskToQueue(pair.task)
+		tl.AddTaskToQueue(pair.task)
 
 		if pair.task.Status != pending {
 			t.Error(
@@ -104,7 +104,7 @@ func TestWork(t *testing.T) {
 	}
 	time.Sleep(2 * time.Second)
 
-	for _, v := range tasks {
+	for _, v := range tl.tasks {
 		if v.Status != finished {
 			t.Error(
 				"For task ID", v.Id,
@@ -113,14 +113,14 @@ func TestWork(t *testing.T) {
 			)
 		}
 	}
+	cancel()
 }
 
 func TestCalcProgression(t *testing.T) {
-	var mu = &sync.Mutex{}
-	var wg = &sync.WaitGroup{}
+	tl := NewTaskList()
 	for _, pair := range test {
-		wg.Add(1)
-		CalcProgression(pair.task, mu, wg)
+		tl.wgCalc.Add(1)
+		tl.CalcProgression(pair.task)
 		if pair.task.Result != pair.res {
 			t.Error(
 				"For task ID", pair.task.Id,
