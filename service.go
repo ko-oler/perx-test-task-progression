@@ -16,12 +16,13 @@ func (tl *TaskList) Work(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			tl.wgCalc.Wait()
-			log.Println("Done, shutting down the tasks")
+			log.Println("Done, shutting down the tasks...")
 			return
 		case t := <-tl.chtasks:
 			tl.wgCalc.Add(1)
-			tl.CalcProgression(t)
+			tl.CalcProgression(t, ctx)
 			tl.wgCalc.Done()
+
 		}
 	}
 
@@ -57,16 +58,39 @@ func (tl *TaskList) SortTasks() {
 	})
 }
 
-func (tl *TaskList) CalcProgression(t *Task) {
-	// defer tl.wgCalc.Done()
+func (tl *TaskList) CalcProgression(t *Task, ctx context.Context) {
+
+	if t == nil {
+		log.Fatalf("Nil value")
+		return
+	}
+
 	var res float32 = t.N1
+	//ticker := time.NewTicker(time.Duration(t.I) * time.Millisecond)
 	t.Status = "Processing task"
 	t.TimeProccesing = time.Now()
 	log.Printf("Started calculation, ID:%s", t.Id)
+
 	for i := 0; i < t.N; i++ {
 		res += t.D
-		time.Sleep(time.Duration(t.I) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			//ticker.Stop()
+			log.Printf("Breaking loop")
+			t.Result = res
+			t.Status = "Cacenled task"
+			t.TimeFinish = time.Now()
+			log.Printf("Canceled task, ID:%s, temp_result:%v ", t.Id, t.Result)
+			//time.AfterFunc(time.Duration(t.TTL)*time.Second, func() { tl.DeleteTask(t) })
+			return
+		case <-time.After(time.Duration(t.I) * time.Millisecond):
+			// case _ = <-ticker.C:
+			// 	// log.Println("Current time: ", tm)
+		}
+
+		// time.Sleep(time.Duration(t.I) * time.Millisecond)
 	}
+
 	t.Result = res
 	t.Status = "Finished task"
 	t.TimeFinish = time.Now()

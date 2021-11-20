@@ -46,8 +46,8 @@ func main() {
 		Addr:    ":80",
 		Handler: r,
 	}
-	r.HandleFunc("/Add", tl.AddHandler).Methods("POST")
-	r.HandleFunc("/List", tl.GetListHandler).Methods("GET")
+	r.HandleFunc("/Add", AddHandler(tl)).Methods("POST")
+	r.HandleFunc("/List", GetListHandler(tl)).Methods("GET")
 	log.Println("Server started on port :80")
 
 	termChan := make(chan os.Signal, 1)
@@ -76,7 +76,7 @@ func main() {
 	// Cancel the context
 	cancel()
 	// Wait to finish
-	log.Println("waiting to finish its tasks")
+	log.Println("waiting current tasks to finish...")
 	tl.wgWork.Wait()
-	log.Println("done. returning.")
+	log.Println("Done. returning.")
 }

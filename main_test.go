@@ -51,7 +51,7 @@ var test = []testpair{
 			N:              20,
 			D:              2,
 			N1:             0,
-			I:              15,
+			I:              10,
 			TTL:            2,
 			Result:         0,
 			Status:         "",
@@ -71,6 +71,7 @@ func TestWork(t *testing.T) {
 	var pending, finished = "Pending task", "Finished task"
 
 	for w := 0; w < totalWorker; w++ {
+		tl.wgWork.Add(1)
 		go tl.Work(ctx)
 	}
 
@@ -87,8 +88,8 @@ func TestWork(t *testing.T) {
 		if pair.task.Id == "1" || pair.task.Id == "2" || pair.task.Id == "3" {
 			t.Error(
 				"For task ID", pair.task.Id,
-				"expected", pair.res,
-				"got", pair.task.Result,
+				"expected ID to be generated",
+				"got", pair.task.Id,
 			)
 		}
 
@@ -102,6 +103,7 @@ func TestWork(t *testing.T) {
 		log.Println(pair.task.Id)
 
 	}
+
 	time.Sleep(2 * time.Second)
 
 	for _, v := range tl.tasks {
@@ -113,14 +115,28 @@ func TestWork(t *testing.T) {
 			)
 		}
 	}
+
+	for _, v := range test {
+		if v.task.Result != v.res {
+			t.Error(
+				"For task ID", v.task.Id,
+				"expected", v.res,
+				"got", v.task.Result,
+			)
+		}
+	}
+
 	cancel()
+	tl.wgWork.Wait()
+
 }
 
 func TestCalcProgression(t *testing.T) {
 	tl := NewTaskList()
+	ctx, cancel := context.WithCancel(context.Background())
 	for _, pair := range test {
 		tl.wgCalc.Add(1)
-		tl.CalcProgression(pair.task)
+		tl.CalcProgression(pair.task, ctx)
 		if pair.task.Result != pair.res {
 			t.Error(
 				"For task ID", pair.task.Id,
@@ -130,4 +146,5 @@ func TestCalcProgression(t *testing.T) {
 
 		}
 	}
+	cancel()
 }
